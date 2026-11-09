@@ -1,3 +1,4 @@
+BUILD_APK_YML = r"""
 name: Build APK via Telegram
 on:
   repository_dispatch:
@@ -25,7 +26,22 @@ jobs:
 
       - name: Download and prepare source
         run: |
-          curl -f -L -o app.zip "${{ github.event.client_payload.zip_url }}"
+          echo "⏳ جاري تحميل الملف..."
+          curl -f -L --retry 3 --retry-delay 5 -o app.zip "${{ github.event.client_payload.zip_url }}"
+          
+          echo "🔍 التحقق من نوع الملف..."
+          file app.zip
+          
+          # إصلاح الخطأ: التحقق مما إذا كان الملف ZIP صالحاً قبل فكه
+          if ! file app.zip | grep -q "Zip archive"; then
+            echo "❌ خطأ فادح: الملف الذي تم تحميله ليس ZIP صالحاً!"
+            echo "محتوى الملف (أول 200 حرف) لمعرفة الخطأ:"
+            head -c 200 app.zip
+            echo ""
+            exit 1
+          fi
+          
+          echo "✅ الملف سليم، جاري فك الضغط..."
           mkdir app_source
           unzip -q app.zip -d app_source
           cd app_source
@@ -73,7 +89,7 @@ jobs:
           if [ -z "$APK_FILE" ]; then
             curl -s -X POST "https://api.telegram.org/bot${{ secrets.BOT_TOKEN }}/sendMessage" \
               -d chat_id="${{ github.event.client_payload.chat_id }}" \
-              -d text="❌ فشل البناء — لم يتم العثور على APK. تحقق من السجلات في GitHub."
+              -d text="❌ فشل البناء — لم يتم العثور على APK."
             exit 1
           fi
           
@@ -87,5 +103,6 @@ jobs:
             curl -s -X POST "https://api.telegram.org/bot${{ secrets.BOT_TOKEN }}/sendDocument" \
               -F chat_id="${{ github.event.client_payload.chat_id }}" \
               -F document=@"$APK_FILE" \
-              -F caption="✅ تم بناء تطبيقك بنجاح عبر GitHub Actions!"
+              -F caption="✅ تم بناء تطبيقك بنجاح!"
           fi
+"""
