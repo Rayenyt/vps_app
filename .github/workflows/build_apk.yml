@@ -1,4 +1,4 @@
-name: Build APK via Telegram
+name: Build APK
 on:
   repository_dispatch:
     types: [build-apk]
@@ -8,71 +8,23 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
-        with:
-          python-version: '3.10'
-      - name: Install dependencies
-        run: |
+        with: { python-version: '3.10' }
+      - run: |
           sudo apt update
-          sudo apt install -y git zip unzip openjdk-17-jdk autoconf libtool pkg-config zlib1g-dev libncurses5-dev libncursesw5-dev libtinfo5 cmake libffi-dev libssl-dev
+          sudo apt install -y git zip unzip openjdk-17-jdk autoconf libtool pkg-config zlib1g-dev libncurses5-dev cmake libffi-dev libssl-dev
           pip install buildozer cython virtualenv
-      - name: Download and prepare source
-        run: |
+      - run: |
           curl -f -L -o app.zip "${{ github.event.client_payload.zip_url }}"
-          mkdir app_source
-          unzip -q app.zip -d app_source
-          cd app_source
-          if [ $(find . -maxdepth 1 -type d ! -name . | wc -l) -eq 1 ]; then
-             SUBDIR=$(find . -maxdepth 1 -type d ! -name . | head -n 1)
-             if [ -f "$SUBDIR/main.py" ] || [ -f "$SUBDIR/buildozer.spec" ]; then
-                shopt -s dotglob
-                mv "$SUBDIR"/* .
-                rm -rf "$SUBDIR"
-             fi
-          fi
+          mkdir app_source && unzip -q app.zip -d app_source && cd app_source
           if [ ! -f "buildozer.spec" ]; then
-            echo '[app]' > buildozer.spec
-            echo "title = ${{ github.event.client_payload.app_name }}" >> buildozer.spec
-            echo 'package.name = myapp' >> buildozer.spec
-            echo 'package.domain = org.test' >> buildozer.spec
-            echo 'source.dir = .' >> buildozer.spec
-            echo 'source.include_exts = py,png,jpg,kv,atlas,json,txt,ttf' >> buildozer.spec
-            echo 'version = 1.0' >> buildozer.spec
-            echo 'requirements = python3,kivy' >> buildozer.spec
-            echo 'orientation = portrait' >> buildozer.spec
-            echo 'fullscreen = 0' >> buildozer.spec
-            echo 'android.permissions = INTERNET' >> buildozer.spec
-            echo 'android.api = 33' >> buildozer.spec
-            echo 'android.minapi = 21' >> buildozer.spec
-            echo 'android.ndk = 25b' >> buildozer.spec
-            echo 'android.archs = arm64-v8a,armeabi-v7a' >> buildozer.spec
-            echo 'android.accept_sdk_license = True' >> buildozer.spec
-            echo '[buildozer]' >> buildozer.spec
-            echo 'log_level = 2' >> buildozer.spec
-            echo 'warn_on_root = 1' >> buildozer.spec
+            printf '[app]\ntitle = ${{ github.event.client_payload.app_name }}\npackage.name = myapp\npackage.domain = org.test\nsource.dir = .\nsource.include_exts = py,png,jpg,kv,atlas\nversion = 1.0\nrequirements = python3,kivy\norientation = portrait\nandroid.permissions = INTERNET\nandroid.api = 33\nandroid.minapi = 21\nandroid.archs = arm64-v8a\nandroid.accept_sdk_license = True\n[buildozer]\nlog_level = 2\n' > buildozer.spec
           fi
-      - name: Build APK
-        run: |
-          cd app_source
           buildozer android debug
-      - name: Upload APK to Telegram
-        run: |
+      - run: |
           cd app_source
-          APK_FILE=$(find bin -name "*.apk" | head -n 1)
-          if [ -z "$APK_FILE" ]; then
-            curl -s -X POST "https://api.telegram.org/bot${{ secrets.BOT_TOKEN }}/sendMessage" \
-              -d chat_id="${{ github.event.client_payload.chat_id }}" \
-              -d text="❌ فشل البناء."
+          APK=$(find bin -name "*.apk" | head -n 1)
+          if [ -z "$APK" ]; then
+            curl -s -X POST "https://api.telegram.org/bot${{ secrets.BOT_TOKEN }}/sendMessage" -d chat_id="${{ github.event.client_payload.chat_id }}" -d text="فشل البناء"
             exit 1
           fi
-          SIZE=$(stat -c%s "$APK_FILE")
-          if [ $SIZE -gt 50000000 ]; then
-            URL=$(curl -s -F "reqtype=fileupload" -F "fileToUpload=@$APK_FILE" https://catbox.moe/user/api.php)
-            curl -s -X POST "https://api.telegram.org/bot${{ secrets.BOT_TOKEN }}/sendMessage" \
-              -d chat_id="${{ github.event.client_payload.chat_id }}" \
-              -d text="✅ تم البناء! الحجم كبير، حمله من هنا: $URL"
-          else
-            curl -s -X POST "https://api.telegram.org/bot${{ secrets.BOT_TOKEN }}/sendDocument" \
-              -F chat_id="${{ github.event.client_payload.chat_id }}" \
-              -F document=@"$APK_FILE" \
-              -F caption="✅ تم بناء تطبيقك بنجاح!"
-          fi
+          curl -s -X POST "https://api.telegram.org/bot${{ secrets.BOT_TOKEN }}/sendDocument" -F chat_id="${{ github.event.client_payload.chat_id }}" -F document=@"$APK" -F caption="تم البناء"
