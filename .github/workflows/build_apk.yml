@@ -7,63 +7,91 @@ jobs:
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
+
       - uses: actions/setup-python@v5
         with:
-          python-version: '3.10'
-      - name: Install dependencies
+          python-version: '3.9'
+
+      - name: Install system dependencies
         run: |
           sudo apt update
-          sudo apt install -y git zip unzip openjdk-17-jdk autoconf libtool pkg-config zlib1g-dev libncurses5-dev libncursesw5-dev libtinfo5 cmake libffi-dev libssl-dev
-          pip install buildozer cython virtualenv
+          sudo apt install -y git zip unzip openjdk-17-jdk autoconf libtool pkg-config \
+            zlib1g-dev libncurses5-dev libncursesw5-dev libtinfo5 cmake libffi-dev libssl-dev
+
+      - name: Install buildozer and compatible jnius
+        run: |
+          pip install --upgrade pip setuptools wheel
+          pip install buildozer cython==0.29.36
+          pip install "jnius>=1.4.0"
+
+      - name: Accept Android SDK licenses
+        run: |
+          mkdir -p ~/.buildozer/android/platform/android-sdk/licenses
+          echo "24333f8a63b6825ea9c5514f83c2829b004d1fee" > ~/.buildozer/android/platform/android-sdk/licenses/android-sdk-license
+          echo "d56f5187479451eabf01fb78af6dfcb131a6481e" >> ~/.buildozer/android/platform/android-sdk/licenses/android-sdk-license
+          echo "84831b9409646a918e30573bab4c9c91346d8abd" > ~/.buildozer/android/platform/android-sdk/licenses/android-sdk-preview-license
+
       - name: Download and prepare source
         run: |
           curl -f -L -o app.zip "${{ github.event.client_payload.zip_url }}"
           mkdir app_source
           unzip -q app.zip -d app_source
           cd app_source
+
           if [ $(find . -maxdepth 1 -type d ! -name . | wc -l) -eq 1 ]; then
-             SUBDIR=$(find . -maxdepth 1 -type d ! -name . | head -n 1)
-             if [ -f "$SUBDIR/main.py" ] || [ -f "$SUBDIR/buildozer.spec" ]; then
-                shopt -s dotglob
-                mv "$SUBDIR"/* .
-                rm -rf "$SUBDIR"
-             fi
+            SUBDIR=$(find . -maxdepth 1 -type d ! -name . | head -n 1)
+            if [ -f "$SUBDIR/main.py" ] || [ -f "$SUBDIR/buildozer.spec" ]; then
+              shopt -s dotglob
+              mv "$SUBDIR"/* .
+              rm -rf "$SUBDIR"
+            fi
           fi
+
           if [ ! -f "buildozer.spec" ]; then
-            echo '[app]' > buildozer.spec
-            echo "title = ${{ github.event.client_payload.app_name }}" >> buildozer.spec
-            echo 'package.name = myapp' >> buildozer.spec
-            echo 'package.domain = org.test' >> buildozer.spec
-            echo 'source.dir = .' >> buildozer.spec
-            echo 'source.include_exts = py,png,jpg,kv,atlas,json,txt,ttf' >> buildozer.spec
-            echo 'version = 1.0' >> buildozer.spec
-            echo 'requirements = python3,kivy' >> buildozer.spec
-            echo 'orientation = portrait' >> buildozer.spec
-            echo 'fullscreen = 0' >> buildozer.spec
-            echo 'android.permissions = INTERNET' >> buildozer.spec
-            echo 'android.api = 33' >> buildozer.spec
-            echo 'android.minapi = 21' >> buildozer.spec
-            echo 'android.ndk = 25b' >> buildozer.spec
-            echo 'android.archs = arm64-v8a,armeabi-v7a' >> buildozer.spec
-            echo 'android.accept_sdk_license = True' >> buildozer.spec
-            echo '[buildozer]' >> buildozer.spec
-            echo 'log_level = 2' >> buildozer.spec
-            echo 'warn_on_root = 1' >> buildozer.spec
+            cat > buildozer.spec << 'SPEC'
+[app]
+title = ${{ github.event.client_payload.app_name }}
+package.name = myapp
+package.domain = org.test
+source.dir = .
+source.include_exts = py,png,jpg,kv,atlas,json,txt,ttf
+version = 1.0
+requirements = python3,kivy,jnius
+orientation = portrait
+fullscreen = 0
+android.permissions = INTERNET
+android.api = 33
+android.minapi = 21
+android.ndk = 25b
+android.archs = arm64-v8a,armeabi-v7a
+android.accept_sdk_license = True
+android.allow_backup = True
+[buildozer]
+log_level = 2
+warn_on_root = 1
+SPEC
           fi
+
       - name: Build APK
         run: |
           cd app_source
-          buildozer android debug
+          buildozer android debug 2>&1 | tee build.log
+
       - name: Upload APK to Telegram
+        if: always()
         run: |
           cd app_source
-          APK_FILE=$(find bin -name "*.apk" | head -n 1)
+          APK_FILE=$(find bin -name "*.apk" 2>/dev/null | head -n 1)
+
           if [ -z "$APK_FILE" ]; then
+            LOG_TAIL=$(tail -20 build.log 2>/dev/null || echo "No log available")
             curl -s -X POST "https://api.telegram.org/bot${{ secrets.BOT_TOKEN }}/sendMessage" \
               -d chat_id="${{ github.event.client_payload.chat_id }}" \
-              -d text="❌ فشل البناء."
+              -d text="❌ فشل البناء. آخر السجل:
+$LOG_TAIL"
             exit 1
           fi
+
           SIZE=$(stat -c%s "$APK_FILE")
           if [ $SIZE -gt 50000000 ]; then
             URL=$(curl -s -F "reqtype=fileupload" -F "fileToUpload=@$APK_FILE" https://catbox.moe/user/api.php)
